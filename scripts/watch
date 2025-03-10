@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+SCRIPT_DIR=`dirname $(realpath "$0")`
+cd $SCRIPT_DIR/..
+
+cmd=$@
+
+echo "running $cmd on changes..."
+echo ""
+ag -l . | entr $cmd
+echo ""
+echo "...stopping watching"

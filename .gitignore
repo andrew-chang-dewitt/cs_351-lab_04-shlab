@@ -1,0 +1,9 @@
+*.swp
+*.swo
+.envrc
+.python-version
+myint
+myspin
+mysplit
+mystop
+tsh
