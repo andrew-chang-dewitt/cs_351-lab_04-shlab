@@ -26,32 +26,22 @@ class Tests(TestCase):
         return cls.tstd + f"/rout{number}"
 
     @classmethod
-    def get_cmd(cls, number: str, impl: str) -> str:
-        return f"{cls.drvr} -t trace{number}.txt -s {impl} -a {cls.args}"
+    def get_cmd(cls, number: int, impl: str) -> str:
+        return f"{cls.drvr} -t trace{number:02d}.txt -s {impl} -a {cls.args}"
 
     @classmethod
-    def run_test(cls, number: str, impl: str) -> str:
+    def run_test(cls, number: int, impl: str) -> str:
         return subprocess.run(
             cls.get_cmd(number, impl).split(" "), capture_output=True
         ).stdout.decode()
 
-    def test_01(self) -> None:
-        act = self.run_test("01", self.itsh)
-        exp = self.run_test("01", self.rtsh)
+    def test_traces(self) -> None:
+        for i in range(1, 3):
+            with self.subTest(i=i):
+                act = self.run_test(i, self.itsh)
+                exp = self.run_test(i, self.rtsh)
 
-        self.assertMultiLineEqual(
-            act,
-            exp,
-        )
-
-    # def test_02(self) -> None:
-    #     act = self.run_test("02", self.itsh)
-    #     exp = self.run_test("02", self.rtsh)
-
-    #     self.assertMultiLineEqual(
-    #         act,
-    #         exp,
-    #     )
+                self.assertMultiLineEqual(act, exp)
 
 
 if __name__ == "__main__":

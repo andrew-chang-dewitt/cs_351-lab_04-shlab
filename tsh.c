@@ -1,9 +1,9 @@
 /*
  * tsh - A tiny shell program with job control
  *
- * Andrew Chang-DeWitt
- * achangd@hawk.iit.edu
- * andrew-chang-dewitt
+ * name   = Andrew Chang-DeWitt
+ * emails = achangdewitt@hawk.iit.edu
+ * github = andrew-chang-dewitt
  */
 #include <ctype.h>
 #include <errno.h>
@@ -163,7 +163,16 @@ int main(int argc, char **argv) {
  * background children don't receive SIGINT (SIGTSTP) from the kernel
  * when we type ctrl-c (ctrl-z) at the keyboard.
  */
-void eval(char *cmdline) { return; }
+void eval(char *cmdline) {
+  // parse commandline into args
+  char *argv[MAXARGS];
+  int bg = parseline(cmdline, argv);
+
+  // defer to builtin commands
+  // TODO: change to check if arg is a builtin & handle it, otherwise
+  // continue evaluating here...
+  builtin_cmd(argv);
+}
 
 /*
  * parseline - Parse the command line and build the argv array.
@@ -223,7 +232,13 @@ int parseline(const char *cmdline, char **argv) {
  * builtin_cmd - If the user has typed a built-in command then execute
  *    it immediately.
  */
-int builtin_cmd(char **argv) { return 0; /* not a builtin command */ }
+int builtin_cmd(char **argv) {
+  // quit command
+  if (strcmp("quit", argv[0]) == 0)
+    exit(0);
+
+  return 0; // not a builtin command
+}
 
 /*
  * do_bgfg - Execute the builtin bg and fg commands
