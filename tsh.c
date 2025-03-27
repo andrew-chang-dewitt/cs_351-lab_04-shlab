@@ -166,12 +166,26 @@ int main(int argc, char **argv) {
 void eval(char *cmdline) {
   // parse commandline into args
   char *argv[MAXARGS];
+  // parsline returns truthy iff command is to be run in background
   int bg = parseline(cmdline, argv);
 
   // defer to builtin commands
-  // TODO: change to check if arg is a builtin & handle it, otherwise
-  // continue evaluating here...
-  builtin_cmd(argv);
+  if (!builtin_cmd(argv)) {
+    // if not a builtin, then find & exec program in child process
+    if (fork() == 0) {
+      // execv returns negative if command isn't found
+      if (execv(argv[0], argv) < 0) {
+        printf("Command not found: %s\n", argv[0]);
+        // exit child process
+        exit(1);
+      }
+    }
+    // if command is foreground, wait for it to complete before
+    // returning control to user
+    if (!bg) {
+      wait(NULL);
+    }
+  }
 }
 
 /*

@@ -36,7 +36,7 @@ class Tests(TestCase):
         ).stdout.decode()
 
     def test_traces(self) -> None:
-        for i in range(1, 3):
+        for i in range(1, 4):
             with self.subTest(i=i):
                 act = self.run_test(i, self.itsh)
                 exp = self.run_test(i, self.rtsh)
