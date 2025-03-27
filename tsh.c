@@ -172,17 +172,27 @@ void eval(char *cmdline) {
   // defer to builtin commands
   if (!builtin_cmd(argv)) {
     // if not a builtin, then find & exec program in child process
-    if (fork() == 0) {
+    pid_t pid = fork();
+    if (pid == 0) {
       // execv returns negative if command isn't found
       if (execv(argv[0], argv) < 0) {
         printf("Command not found: %s\n", argv[0]);
-        // exit child process
+        // exit child process w/ error state
         exit(1);
       }
+      // "return early" by exiting child process w/ success state
+      exit(0);
     }
-    // if command is foreground, wait for it to complete before
-    // returning control to user
-    if (!bg) {
+    // only proceed from here if in parent process
+    // if command is in bg add to jobs list, show pid and jid,
+    // then return control immediately
+    if (bg) {
+      addjob(jobs, pid, 0, cmdline); // FIXME: what is arg state here?
+      struct job_t *job = getjobpid(jobs, pid);
+      printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+    }
+    // otherwise, wait for it to complete before returning control to user
+    else {
       wait(NULL);
     }
   }
