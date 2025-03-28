@@ -136,6 +136,10 @@ class Tests(TestCase):
         act, exp = self.exec(6)
         self.assertMultilineEqualExceptPid(act, exp)
 
+    def test_trace07(self) -> None:
+        act, exp = self.exec(7)
+        self.assertMultilineEqualExceptPid(act, exp)
+
 
 if __name__ == "__main__":
     main()
