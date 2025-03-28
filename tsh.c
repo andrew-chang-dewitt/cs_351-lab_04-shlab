@@ -184,19 +184,18 @@ void eval(char *cmdline) {
       exit(0);
     }
     // only proceed from here if in parent process
-    // if command is in bg add to jobs list, show pid and jid,
-    // then return control immediately
-    if (bg) {
-      // get next job id for printing
-      int jid = nextjid;
-      // add job w/ child pid, background state, & command to jobs list
-      addjob(jobs, pid, BG, cmdline);
+    // get next job id for printing
+    int jid = nextjid;
+    // determine job state
+    int state = bg ? BG : FG;
+    // add job to jobs list
+    addjob(jobs, pid, state, cmdline);
+    // if command is in bg show pid and jid then return control immediately
+    if (bg)
       printf("[%d] (%d) %s", jid, pid, cmdline);
-    }
     // otherwise, wait for it to complete before returning control to user
-    else {
-      wait(NULL);
-    }
+    else
+      waitfg(pid);
   }
 }
 
@@ -278,7 +277,12 @@ void do_bgfg(char **argv) { return; }
 /*
  * waitfg - Block until process pid is no longer the foreground process
  */
-void waitfg(pid_t pid) { return; }
+void waitfg(pid_t pid) {
+  // wait for job to finish
+  waitpid(pid, NULL, 0);
+  // then remove from jobs list
+  deletejob(jobs, pid);
+}
 
 /*****************
  * Signal handlers
@@ -294,11 +298,30 @@ void waitfg(pid_t pid) { return; }
 void sigchld_handler(int sig) { return; }
 
 /*
- * sigint_handler - The kernel sends a SIGINT to the shell whenver the
- *    user types ctrl-c at the keyboard.  Catch it and send it along
+ * sigint_handler - The kernel sends a SIGINT to the shell whenever the
+ *    user types ctrl-c at the keyboard. Catch it and send it along
  *    to the foreground job.
  */
-void sigint_handler(int sig) { return; }
+void sigint_handler(int sig) {
+  // NOTE: may need to ensure signals are captured by tsh instead of
+  // host shell...
+  // get pid of current fg job
+  pid_t pid = fgpid(jobs);
+  // if no such job, silently return early
+  if (!pid) {
+    printf("no foreground job exists\n");
+    return;
+  }
+
+  // else get job info
+  struct job_t *job = getjobpid(jobs, pid);
+  // and send kill signal to it
+  if (kill(pid, sig) < 0)
+    printf("Interrupt error: failed to kill %d\n", pid);
+  else
+    // then print confirmation job was killed
+    printf("Job [%d] (%d) terminated by signal %d\n", job->jid, pid, sig);
+}
 
 /*
  * sigtstp_handler - The kernel sends a SIGTSTP to the shell whenever
