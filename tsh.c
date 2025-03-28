@@ -187,9 +187,11 @@ void eval(char *cmdline) {
     // if command is in bg add to jobs list, show pid and jid,
     // then return control immediately
     if (bg) {
-      addjob(jobs, pid, 0, cmdline); // FIXME: what is arg state here?
-      struct job_t *job = getjobpid(jobs, pid);
-      printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+      // get next job id for printing
+      int jid = nextjid;
+      // add job w/ child pid, background state, & command to jobs list
+      addjob(jobs, pid, BG, cmdline);
+      printf("[%d] (%d) %s", jid, pid, cmdline);
     }
     // otherwise, wait for it to complete before returning control to user
     else {
@@ -260,6 +262,10 @@ int builtin_cmd(char **argv) {
   // quit command
   if (strcmp("quit", argv[0]) == 0)
     exit(0);
+  if (strcmp("jobs", argv[0]) == 0) {
+    listjobs(jobs);
+    return 1;
+  }
 
   return 0; // not a builtin command
 }
