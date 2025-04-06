@@ -27,6 +27,47 @@
 #define BG 2    /* running in background */
 #define ST 3    /* stopped */
 
+/* Logger helpers */
+#define PREF_ERR "[ERROR] "
+#define PREF_WARN "[WARN] "
+#define PREF_INFO "[INFO] "
+
+#define LOGWLOC(stream, prefix, msg)                                           \
+  {                                                                            \
+    fprintf(stream, "[pid:%d] %s[%s:%d] %s\n", getpid(), prefix, __FILE__,     \
+            __LINE__, msg);                                                    \
+  }
+
+#define LOGWLOCF(stream, prefix, fmt, ...)                                     \
+  {                                                                            \
+    char loc[] = "[%s:%d] ";                                                   \
+    char *res;                                                                 \
+    if (asprintf(&res, "[pid:%d] %s%s%s\n", getpid(), prefix, loc, fmt) < 0)   \
+      fprintf(stream, fmt, __VA_ARGS__);                                       \
+    else                                                                       \
+      fprintf(stream, res, __FILE__, __LINE__, __VA_ARGS__);                   \
+    free(res);                                                                 \
+  }
+
+#define LOGERR(msg)                                                            \
+  if (verbose)                                                                 \
+  LOGWLOC(stderr, PREF_ERR, msg)
+#define FLOGERR(fmt, ...)                                                      \
+  if (verbose)                                                                 \
+  LOGWLOCF(stderr, PREF_ERR, fmt, __VA_ARGS__)
+#define LOGWARN(msg)                                                           \
+  if (verbose)                                                                 \
+  LOGWLOC(stdout, PREF_WARN, msg)
+#define FLOGWARN(fmt, ...)                                                     \
+  if (verbose)                                                                 \
+  LOGWLOCF(stdout, PREF_WARN, fmt, __VA_ARGS__)
+#define LOGINFO(msg)                                                           \
+  if (verbose)                                                                 \
+  LOGWLOC(stdout, PREF_INFO, msg)
+#define FLOGINFO(fmt, ...)                                                     \
+  if (verbose)                                                                 \
+  LOGWLOCF(stdout, PREF_INFO, fmt, __VA_ARGS__)
+
 /*
  * Jobs states: FG (foreground), BG (background), ST (stopped)
  * Job state transitions and enabling actions:
@@ -164,37 +205,80 @@ int main(int argc, char **argv) {
  * when we type ctrl-c (ctrl-z) at the keyboard.
  */
 void eval(char *cmdline) {
-  // parse commandline into args
-  char *argv[MAXARGS];
-  // parsline returns truthy iff command is to be run in background
-  int bg = parseline(cmdline, argv);
+  LOGINFO("begin eval");
 
-  // defer to builtin commands
-  if (!builtin_cmd(argv)) {
-    // if not a builtin, then find & exec program in child process
-    pid_t pid = fork();
-    if (pid == 0) {
-      // execv returns negative if command isn't found
-      if (execv(argv[0], argv) < 0) {
-        printf("Command not found: %s\n", argv[0]);
-        // exit child process w/ error state
-        exit(1);
-      }
-      // "return early" by exiting child process w/ success state
-      exit(0);
+  char *argv[MAXARGS]; // parse commandline into args
+  int bg = parseline(
+      cmdline,
+      argv); // parseline returns truthy iff command is to be run in background
+
+  FLOGINFO("%s: checking if builtin command...", argv[0]);
+  int is_builtin = builtin_cmd(argv); // run as builtin command, if builtin
+
+  if (!is_builtin) { // otherwise, handle command
+    FLOGINFO(
+        "%s: %s",
+        "not a builtin command, attempting to exec command in child process",
+        argv[0]);
+    // setup signal masks
+    sigset_t mask_sigall, // for masking all signals
+        mask_sigchld,     // for child signals only
+        prev_sigset;      // for temporarily
+                          // storing previous
+                          // masks to be restored
+                          // after some op
+
+    sigfillset(&mask_sigall); // then construct actual sets for all & child
+    sigemptyset(&mask_sigchld);
+    sigaddset(&mask_sigchld, SIGCHLD);
+
+    // block sigchld while creating new child to prevent race before ready to
+    // handle child signals
+    LOGINFO("blocking SIGCHLD");
+    if (sigprocmask(SIG_BLOCK, &mask_sigchld, &prev_sigset) != 0)
+      fprintf(stderr, "WARNING: failed to block SIGCHLD");
+
+    LOGINFO("attempting to create child process");
+    pid_t pid = fork(); // fork & exec program in child process
+    if (pid == -1) {    // handle fork error
+      fprintf(stderr, "Unable to fork child process for: %s",
+              cmdline);                             // warn user
+      sigprocmask(SIG_SETMASK, &prev_sigset, NULL); // restore sig mask
+      return;                                       // quit eval
     }
-    // only proceed from here if in parent process
-    // get next job id for printing
-    int jid = nextjid;
-    // determine job state
-    int state = bg ? BG : FG;
-    // add job to jobs list
-    addjob(jobs, pid, state, cmdline);
-    // if command is in bg show pid and jid then return control immediately
-    if (bg)
-      printf("[%d] (%d) %s", jid, pid, cmdline);
-    // otherwise, wait for it to complete before returning control to user
-    else
+
+    if (pid == 0) { // BEGIN CHILD PROC
+      setpgrp();    // ensure all children are in own process group
+      if (sigprocmask(SIG_UNBLOCK, &mask_sigchld, NULL) !=
+          0) // allow child to handle sigchld
+        fprintf(stderr, "WARNING: failed to unblock SIGCHLD");
+
+      FLOGINFO("%s: executing command in child process...", argv[0]);
+      int result = execv(argv[0], argv); // exec command program
+      if (result < 0) { // execv returns negative if command isn't found
+        char *msg;
+        asprintf(&msg, "%s: Command not found", argv[0]);
+        unix_error(msg); // warn user & exit child proc in unix error handler
+      }
+
+      LOGINFO("...done. exiting child process");
+      exit(0); // "return early" by exiting child process w/ success state
+    } // END CHILD PROC
+
+    // PARENT PROC (TSH) RESUMES HERE
+    int state = bg ? BG : FG;                          // determine job state
+    int job_added = addjob(jobs, pid, state, cmdline); // add job to jobs list
+
+    if (!job_added) { // handle error adding job
+      fprintf(stderr, "Failed to create job for %s", cmdline); // alert user
+      return;                                                  // quit eval
+    }
+
+    sigprocmask(SIG_UNBLOCK, &mask_sigchld, NULL); // ready to handle sigchld
+
+    if (bg) // show pid and jid then return control immediately
+      printf("[%d] (%d) %s", pid2jid(pid), pid, cmdline);
+    else // wait for job to term or stop before returning control to user
       waitfg(pid);
   }
 }
@@ -258,10 +342,14 @@ int parseline(const char *cmdline, char **argv) {
  *    it immediately.
  */
 int builtin_cmd(char **argv) {
-  // quit command
-  if (strcmp("quit", argv[0]) == 0)
+  // quit command exits tsh
+  if (strcmp("quit", argv[0]) == 0) {
+    LOGINFO("quit received, exiting tsh");
     exit(0);
+  }
+  // jobs command shows jobs list
   if (strcmp("jobs", argv[0]) == 0) {
+    LOGINFO("jobs builtin received, printing jobs list");
     listjobs(jobs);
     return 1;
   }
@@ -278,10 +366,23 @@ void do_bgfg(char **argv) { return; }
  * waitfg - Block until process pid is no longer the foreground process
  */
 void waitfg(pid_t pid) {
-  // wait for job to finish
-  waitpid(pid, NULL, 0);
-  // then remove from jobs list
-  deletejob(jobs, pid);
+  int waiting = 1; // init waiting to True
+
+  while (waiting) {
+    // sigset_t mask_none, prev_mask; // allow receiving of all signals
+    // sigemptyset(&mask_none);
+    // sigprocmask(SIG_BLOCK, &mask_none, &prev_mask);
+
+    struct job_t *job = getjobpid(jobs, pid); // check if still waiting
+    waiting = (job && job->state == FG) ? 1 : 0;
+
+    if (waiting) // pause until a signal is received
+      pause();
+    // NOTE: all actual signal handling will be done in sig handlers,
+    //       including updating job status on appropriate signals
+  }
+  // sigprocmask(SIG_BLOCK, &prev_mask,
+  //             NULL); // when done waiting, restore previous mask
 }
 
 /*****************
@@ -295,7 +396,65 @@ void waitfg(pid_t pid) {
  *     available zombie children, but doesn't wait for any other
  *     currently running children to terminate.
  */
-void sigchld_handler(int sig) { return; }
+void sigchld_handler(int _) {
+  LOGINFO("SIGCHLD caught, handling...");
+  int pid;                           // to store pid of changed child proc
+  int status;                        // to store child proc status
+  sigset_t mask_sigall, prev_sigset; // signal set masks
+
+  // block all signals while handline sigchld
+  sigfillset(&mask_sigall);
+  sigprocmask(SIG_BLOCK, &mask_sigall, &prev_sigset);
+
+  // reap and update ALL children necessary
+  while ((pid = waitpid(-1,           // wait for ANY child to term/stop
+                        &status,      // save status here
+                        WNOHANG |     // poll instead of blocking
+                            WUNTRACED // get stopped jobs too, not just termed
+                        )) > 0) {
+    FLOGINFO("Child proc (%d) changed, checking status...", pid);
+
+    // handle the following cases:
+    // 1. child termed due to exit
+    if (WIFEXITED(status)) {
+      LOGINFO("process exited, requesting deletion...");
+      deletejob(jobs, pid); // then remove from jobs list
+
+      // handler done, cleanup
+      sigprocmask(SIG_SETMASK, &prev_sigset, NULL); // restore signal mask
+      return; // return early to end processing
+    }
+
+    // 2. child termed due to signal
+    if (WIFSIGNALED(status)) {
+      int sig = WTERMSIG(status);
+      FLOGINFO("process  termed due to signal %d", sig);
+      deletejob(jobs, pid); // then remove from jobs list
+
+      // handler done, cleanup
+      sigprocmask(SIG_SETMASK, &prev_sigset, NULL); // restore signal mask
+      return; // return early to end processing
+    }
+
+    // 3. child stopped due to signal
+    if (WIFSTOPPED(status)) {
+      int sig = WSTOPSIG(status);
+      FLOGINFO("process  stopped due to signal %d", sig);
+      struct job_t *job = getjobpid(jobs, pid); // get job data
+      job->state = ST;                          // update state to Stopped
+      printf("Job [%d] (%d) stopped by signal %d\n", job->jid, pid,
+             sig); // & print confirmation
+
+      // handler done, cleanup
+      sigprocmask(SIG_SETMASK, &prev_sigset, NULL); // restore signal mask
+      return; // return early to end processing
+    }
+
+    // ERROR -- if this point is reached, then something has gone wrong
+    sigprocmask(SIG_SETMASK, &prev_sigset, NULL); // restore signal mask
+    unix_error("Unhandled SIGCHLD received, unable to continue."); // exit
+  }
+}
 
 /*
  * sigint_handler - The kernel sends a SIGINT to the shell whenever the
@@ -328,7 +487,23 @@ void sigint_handler(int sig) {
  *     the user types ctrl-z at the keyboard. Catch it and suspend the
  *     foreground job by sending it a SIGTSTP.
  */
-void sigtstp_handler(int sig) { return; }
+void sigtstp_handler(int sig) {
+  FLOGINFO("handling signal %d", sig);
+  // get current fg job pid
+  pid_t pid = fgpid(jobs);
+  // if no such job, silently return early
+  if (!pid) {
+    printf("no foreground job exists\n");
+    return;
+  }
+
+  // else stop job by forwarding the signal
+  struct job_t *job = getjobpid(jobs, pid);
+  FLOGINFO("fg job [%d] (%d) found, forwarding signal to child group...",
+           job->jid, pid);
+  if (kill(-pid, sig) < 0)
+    printf("Stop error: failed to stop %d\n", pid);
+}
 
 /*********************
  * End signal handlers
@@ -368,8 +543,10 @@ int maxjid(struct job_t *jobs) {
 int addjob(struct job_t *jobs, pid_t pid, int state, char *cmdline) {
   int i;
 
-  if (pid < 1)
+  if (pid < 1) {
+    fprintf(stderr, "Unable to create job for pid %d", pid);
     return 0;
+  }
 
   for (i = 0; i < MAXJOBS; i++) {
     if (jobs[i].pid == 0) {
@@ -386,12 +563,14 @@ int addjob(struct job_t *jobs, pid_t pid, int state, char *cmdline) {
       return 1;
     }
   }
-  printf("Tried to create too many jobs\n");
+
+  fprintf(stderr, "Tried to create too many jobs\n");
   return 0;
 }
 
 /* deletejob - Delete a job whose PID=pid from the job list */
 int deletejob(struct job_t *jobs, pid_t pid) {
+  FLOGINFO("delete requested for job(%d)", pid);
   int i;
 
   if (pid < 1)
@@ -399,8 +578,12 @@ int deletejob(struct job_t *jobs, pid_t pid) {
 
   for (i = 0; i < MAXJOBS; i++) {
     if (jobs[i].pid == pid) {
+      struct job_t job = jobs[i];
+      FLOGINFO("[%d] (%d) %s: job found, deleting", job.jid, job.pid,
+               job.cmdline);
       clearjob(&jobs[i]);
       nextjid = maxjid(jobs) + 1;
+      LOGINFO("job deleted");
       return 1;
     }
   }
