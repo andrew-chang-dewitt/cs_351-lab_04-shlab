@@ -404,7 +404,7 @@ void do_bgfg(int argc, char **argv) {
   // handle command
   int jid = jid_lng;                        // coerce long to int
   struct job_t *job = getjobjid(jobs, jid); // get requested job data
-  kill(job->pid, SIGCONT);                  // resume job process
+  kill(-job->pid, SIGCONT);                 // resume job process
 
   if (strcmp("bg", argv[0]) == 0) {                           // handle bg
     printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline); // update user
@@ -528,7 +528,7 @@ void sigint_handler(int sig) {
   // else get job info
   struct job_t *job = getjobpid(jobs, pid);
   // and send kill signal to it
-  if (kill(pid, sig) < 0)
+  if (kill(-pid, sig) < 0)
     printf("Interrupt error: failed to kill %d\n", pid);
   else
     // then print confirmation job was killed
