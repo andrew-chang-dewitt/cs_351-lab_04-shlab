@@ -98,8 +98,8 @@ struct job_t jobs[MAXJOBS]; /* The job list */
 
 /* Here are the functions that you will implement */
 void eval(char *cmdline);
-int builtin_cmd(char **argv);
-void do_bgfg(char **argv);
+int builtin_cmd(int argc, char **argv);
+void do_bgfg(int argc, char **argv);
 void waitfg(pid_t pid);
 
 void sigchld_handler(int sig);
@@ -107,7 +107,7 @@ void sigtstp_handler(int sig);
 void sigint_handler(int sig);
 
 /* Here are helper routines that we've provided for you */
-int parseline(const char *cmdline, char **argv);
+int parseline(const char *cmdline, int *argc_dest, char **argv);
 void sigquit_handler(int sig);
 
 void initjobs(struct job_t *jobs);
@@ -207,13 +207,15 @@ int main(int argc, char **argv) {
 void eval(char *cmdline) {
   LOGINFO("begin eval");
 
+  int argc;
   char *argv[MAXARGS]; // parse commandline into args
   int bg = parseline(
-      cmdline,
+      cmdline, &argc,
       argv); // parseline returns truthy iff command is to be run in background
 
   FLOGINFO("%s: checking if builtin command...", argv[0]);
-  int is_builtin = builtin_cmd(argv); // run as builtin command, if builtin
+  int is_builtin =
+      builtin_cmd(argc, argv); // run as builtin command, if builtin
 
   if (!is_builtin) { // otherwise, handle command
     FLOGINFO(
@@ -290,12 +292,12 @@ void eval(char *cmdline) {
  * argument.  Return true if the user has requested a BG job, false if
  * the user has requested a FG job.
  */
-int parseline(const char *cmdline, char **argv) {
+int parseline(const char *cmdline, int *argc_dest, char **argv) {
   static char array[MAXLINE]; /* holds local copy of command line */
   char *buf = array;          /* ptr that traverses command line */
   char *delim;                /* points to first space delimiter */
-  int argc;                   /* number of args */
-  int bg;                     /* background job? */
+  int argc;
+  int bg; /* background job? */
 
   strcpy(buf, cmdline);
   buf[strlen(buf) - 1] = ' ';   /* replace trailing '\n' with space */
@@ -334,6 +336,10 @@ int parseline(const char *cmdline, char **argv) {
   if ((bg = (*argv[argc - 1] == '&')) != 0) {
     argv[--argc] = NULL;
   }
+
+  // update argc pointer arg
+  *argc_dest = argc;
+
   return bg;
 }
 
@@ -341,16 +347,24 @@ int parseline(const char *cmdline, char **argv) {
  * builtin_cmd - If the user has typed a built-in command then execute
  *    it immediately.
  */
-int builtin_cmd(char **argv) {
+int builtin_cmd(int argc, char **argv) {
   // quit command exits tsh
   if (strcmp("quit", argv[0]) == 0) {
     LOGINFO("quit received, exiting tsh");
     exit(0);
   }
+
   // jobs command shows jobs list
   if (strcmp("jobs", argv[0]) == 0) {
     LOGINFO("jobs builtin received, printing jobs list");
     listjobs(jobs);
+    return 1;
+  }
+
+  // bg & fg commands
+  if (strcmp("bg", argv[0]) == 0 || strcmp("fg", argv[0]) == 0) {
+    FLOGINFO("%s builtin received, forwarding command to handler", argv[0]);
+    do_bgfg(argc, argv);
     return 1;
   }
 
@@ -360,7 +374,44 @@ int builtin_cmd(char **argv) {
 /*
  * do_bgfg - Execute the builtin bg and fg commands
  */
-void do_bgfg(char **argv) { return; }
+void do_bgfg(int argc, char **argv) {
+  if (strcmp("bg", argv[0]) == 0) {
+    FLOGINFO("%s command received with arg %s, handling...", argv[0], argv[1]);
+
+    // ensure command syntax is correct
+    // check arg length correct
+    if (argc != 2) {
+      fprintf(stderr, "%s: bad syntax, expected exactly 1 argument, got %d\n",
+              argv[0], argc - 1);
+      return;
+    }
+    // check arg preceded by `%`
+    if (argv[1][0] != '%') {
+      fprintf(stderr,
+              "%s: bad syntax, job id must be preceded by '%%', got %s\n",
+              argv[0], argv[1]);
+      return;
+    }
+    // check arg is number
+    char *jid_str = argv[1] + 1; // skip first char in num conversion
+    char *endptr; // stores ptr first invalid char in num conversion
+    long jid_lng = strtol(jid_str, &endptr, 10);
+    if (*endptr != '\0') { // num converted successfully if endptr is null char
+      fprintf(
+          stderr,
+          "%s: bad syntax, job id a valid number preceded by '%%', got %s\n",
+          argv[0], argv[1]);
+      return;
+    }
+
+    // handle bg command
+    int jid = jid_lng;                        // coerce long to int
+    struct job_t *job = getjobjid(jobs, jid); // get requested job data
+    kill(job->pid, SIGCONT);                  // resume job process
+    printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline); // update user
+    job->state = BG; // update job status
+  }
+}
 
 /*
  * waitfg - Block until process pid is no longer the foreground process

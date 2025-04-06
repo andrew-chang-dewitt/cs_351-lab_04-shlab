@@ -149,6 +149,10 @@ class Tests(IsolatedAsyncioTestCase):
         act, exp = await self.exec(8)
         self.assertMultilineEqualExceptPid(act, exp)
 
+    async def test_trace09(self) -> None:
+        act, exp = await self.exec(9)
+        self.assertMultilineEqualExceptPid(act, exp)
+
 
 if __name__ == "__main__":
     main()
