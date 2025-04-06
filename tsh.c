@@ -375,41 +375,43 @@ int builtin_cmd(int argc, char **argv) {
  * do_bgfg - Execute the builtin bg and fg commands
  */
 void do_bgfg(int argc, char **argv) {
-  if (strcmp("bg", argv[0]) == 0) {
-    FLOGINFO("%s command received with arg %s, handling...", argv[0], argv[1]);
+  FLOGINFO("%s command received with arg %s, handling...", argv[0], argv[1]);
 
-    // ensure command syntax is correct
-    // check arg length correct
-    if (argc != 2) {
-      fprintf(stderr, "%s: bad syntax, expected exactly 1 argument, got %d\n",
-              argv[0], argc - 1);
-      return;
-    }
-    // check arg preceded by `%`
-    if (argv[1][0] != '%') {
-      fprintf(stderr,
-              "%s: bad syntax, job id must be preceded by '%%', got %s\n",
-              argv[0], argv[1]);
-      return;
-    }
-    // check arg is number
-    char *jid_str = argv[1] + 1; // skip first char in num conversion
-    char *endptr; // stores ptr first invalid char in num conversion
-    long jid_lng = strtol(jid_str, &endptr, 10);
-    if (*endptr != '\0') { // num converted successfully if endptr is null char
-      fprintf(
-          stderr,
-          "%s: bad syntax, job id a valid number preceded by '%%', got %s\n",
-          argv[0], argv[1]);
-      return;
-    }
+  // ensure command syntax is correct
+  // check arg length correct
+  if (argc != 2) {
+    fprintf(stderr, "%s: bad syntax, expected exactly 1 argument, got %d\n",
+            argv[0], argc - 1);
+    return;
+  }
+  // check arg preceded by `%`
+  if (argv[1][0] != '%') {
+    fprintf(stderr, "%s: bad syntax, job id must be preceded by '%%', got %s\n",
+            argv[0], argv[1]);
+    return;
+  }
+  // check arg is number
+  char *jid_str = argv[1] + 1; // skip first char in num conversion
+  char *endptr; // stores ptr first invalid char in num conversion
+  long jid_lng = strtol(jid_str, &endptr, 10);
+  if (*endptr != '\0') { // num converted successfully if endptr is null char
+    fprintf(stderr,
+            "%s: bad syntax, job id a valid number preceded by '%%', got %s\n",
+            argv[0], argv[1]);
+    return;
+  }
 
-    // handle bg command
-    int jid = jid_lng;                        // coerce long to int
-    struct job_t *job = getjobjid(jobs, jid); // get requested job data
-    kill(job->pid, SIGCONT);                  // resume job process
+  // handle command
+  int jid = jid_lng;                        // coerce long to int
+  struct job_t *job = getjobjid(jobs, jid); // get requested job data
+  kill(job->pid, SIGCONT);                  // resume job process
+
+  if (strcmp("bg", argv[0]) == 0) {                           // handle bg
     printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline); // update user
-    job->state = BG; // update job status
+    job->state = BG;  // update job status to background
+  } else {            // handle fg
+    job->state = FG;  // update job status to foreground
+    waitfg(job->pid); // wait for job to complete
   }
 }
 
