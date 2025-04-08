@@ -487,8 +487,13 @@ void sigchld_handler(int _) {
     // 2. child termed due to signal
     if (WIFSIGNALED(status)) {
       int sig = WTERMSIG(status);
-      FLOGINFO("process  termed due to signal %d", sig);
+      struct job_t *job = getjobpid(jobs, pid); // get job data
+      if (!job)
+        FLOGERR("error terminating job, no job found for pid (%d)", pid);
+      int jid = job->jid;
       deletejob(jobs, pid); // then remove from jobs list
+      printf("Job [%d] (%d) terminated by signal %d\n", jid, pid,
+             sig); // & print confirmation
 
       // handler done, cleanup
       sigprocmask(SIG_SETMASK, &prev_sigset, NULL); // restore signal mask
@@ -500,7 +505,9 @@ void sigchld_handler(int _) {
       int sig = WSTOPSIG(status);
       FLOGINFO("process  stopped due to signal %d", sig);
       struct job_t *job = getjobpid(jobs, pid); // get job data
-      job->state = ST;                          // update state to Stopped
+      if (!job)
+        FLOGERR("error updating job, no job found for pid (%d)", pid);
+      job->state = ST; // update state to Stopped
       printf("Job [%d] (%d) stopped by signal %d\n", job->jid, pid,
              sig); // & print confirmation
 
@@ -521,8 +528,7 @@ void sigchld_handler(int _) {
  *    to the foreground job.
  */
 void sigint_handler(int sig) {
-  // NOTE: may need to ensure signals are captured by tsh instead of
-  // host shell...
+  FLOGINFO("handling signal %d", sig);
   // get pid of current fg job
   pid_t pid = fgpid(jobs);
   // if no such job, silently return early
@@ -530,15 +536,10 @@ void sigint_handler(int sig) {
     printf("no foreground job exists\n");
     return;
   }
-
-  // else get job info
-  struct job_t *job = getjobpid(jobs, pid);
-  // and send kill signal to it
-  if (kill(-pid, sig) < 0)
+  // otherwise send kill signal to process group
+  FLOGINFO("fg job (%d) found, forwarding signal to child group...", pid);
+  if (kill(-pid, SIGINT) < 0)
     printf("Interrupt error: failed to kill %d\n", pid);
-  else
-    // then print confirmation job was killed
-    printf("Job [%d] (%d) terminated by signal %d\n", job->jid, pid, sig);
 }
 
 /*
@@ -555,12 +556,9 @@ void sigtstp_handler(int sig) {
     printf("no foreground job exists\n");
     return;
   }
-
   // else stop job by forwarding the signal
-  struct job_t *job = getjobpid(jobs, pid);
-  FLOGINFO("fg job [%d] (%d) found, forwarding signal to child group...",
-           job->jid, pid);
-  if (kill(-pid, sig) < 0)
+  FLOGINFO("fg job (%d) found, forwarding signal to child group...", pid);
+  if (kill(-pid, SIGTSTP) < 0)
     printf("Stop error: failed to stop %d\n", pid);
 }
 
