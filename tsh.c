@@ -258,9 +258,8 @@ void eval(char *cmdline) {
       FLOGINFO("%s: executing command in child process...", argv[0]);
       int result = execv(argv[0], argv); // exec command program
       if (result < 0) { // execv returns negative if command isn't found
-        char *msg;
-        asprintf(&msg, "%s: Command not found", argv[0]);
-        unix_error(msg); // warn user & exit child proc in unix error handler
+        printf("%s: Command not found\n", argv[0]);
+        exit(1);
       }
 
       LOGINFO("...done. exiting child process");
@@ -380,31 +379,38 @@ void do_bgfg(int argc, char **argv) {
   // ensure command syntax is correct
   // check arg length correct
   if (argc != 2) {
-    fprintf(stderr, "%s: bad syntax, expected exactly 1 argument, got %d\n",
-            argv[0], argc - 1);
-    return;
-  }
-  // check arg preceded by `%`
-  if (argv[1][0] != '%') {
-    fprintf(stderr, "%s: bad syntax, job id must be preceded by '%%', got %s\n",
-            argv[0], argv[1]);
-    return;
-  }
-  // check arg is number
-  char *jid_str = argv[1] + 1; // skip first char in num conversion
-  char *endptr; // stores ptr first invalid char in num conversion
-  long jid_lng = strtol(jid_str, &endptr, 10);
-  if (*endptr != '\0') { // num converted successfully if endptr is null char
-    fprintf(stderr,
-            "%s: bad syntax, job id a valid number preceded by '%%', got %s\n",
-            argv[0], argv[1]);
+    fprintf(stderr, "%s command requires PID or %%jobid argument\n", argv[0]);
     return;
   }
 
-  // handle command
-  int jid = jid_lng;                        // coerce long to int
-  struct job_t *job = getjobjid(jobs, jid); // get requested job data
-  kill(-job->pid, SIGCONT);                 // resume job process
+  // parse arg
+  char *id_str = argv[1];
+  int is_jid = 0;
+  if (id_str[0] == '%') {
+    is_jid = 1;
+    id_str++;
+  }
+
+  // id str -> num conversion
+  char *endptr; // stores ptr first invalid char in num conversion
+  long id_lng = strtol(id_str, &endptr, 10);
+  // check for conversion error
+  if (*endptr != '\0') { // num converted successfully if endptr is null char
+    fprintf(stderr, "%s: argument must be a PID or %%jobid\n", argv[0]);
+    return;
+  }
+  int id = id_lng; // coerce long to int
+
+  struct job_t *job = is_jid                     // get requested job data
+                          ? getjobjid(jobs, id)  // by jid if %
+                          : getjobpid(jobs, id); // else by pid
+  if (!job) {                                    // alert user if bad job id/pid
+    char *fmt = is_jid ? "%%%d: No such job\n" : "(%d): No such process\n";
+    fprintf(stderr, fmt, id);
+    return;
+  }
+
+  kill(-job->pid, SIGCONT); // resume job process
 
   if (strcmp("bg", argv[0]) == 0) {                           // handle bg
     printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline); // update user
@@ -419,13 +425,13 @@ void do_bgfg(int argc, char **argv) {
  * waitfg - Block until process pid is no longer the foreground process
  */
 void waitfg(pid_t pid) {
+  sigset_t mask_none, prev_mask; // allow receiving of all signals while waiting
+  sigemptyset(&mask_none);
+  sigprocmask(SIG_BLOCK, &mask_none, &prev_mask);
+
   int waiting = 1; // init waiting to True
 
   while (waiting) {
-    // sigset_t mask_none, prev_mask; // allow receiving of all signals
-    // sigemptyset(&mask_none);
-    // sigprocmask(SIG_BLOCK, &mask_none, &prev_mask);
-
     struct job_t *job = getjobpid(jobs, pid); // check if still waiting
     waiting = (job && job->state == FG) ? 1 : 0;
 
@@ -434,8 +440,8 @@ void waitfg(pid_t pid) {
     // NOTE: all actual signal handling will be done in sig handlers,
     //       including updating job status on appropriate signals
   }
-  // sigprocmask(SIG_BLOCK, &prev_mask,
-  //             NULL); // when done waiting, restore previous mask
+  sigprocmask(SIG_BLOCK, &prev_mask,
+              NULL); // when done waiting, restore previous mask
 }
 
 /*****************
